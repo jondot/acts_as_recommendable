@@ -1,4 +1,5 @@
 # ActsAsRecommended
+
 module MadeByMany
   module ActsAsRecommendable
     def self.included(base)
@@ -45,7 +46,8 @@ module MadeByMany
         options[:through_class]     ||= through_assoc.klass
         
         class_inheritable_accessor :aar_options
-        self.aar_options = options
+        self.aar_options ||= {}
+        self.aar_options[on] = options
         
         options[:on_class].class_eval do
           define_method "similar_#{options[:on]}" do
@@ -53,25 +55,26 @@ module MadeByMany
           end
         end
 
-        define_method "similar_#{options[:class].name.underscore.pluralize}" do
+        define_method "similar_#{options[:class].name.underscore.pluralize}_by_#{options[:on_class].name.underscore.pluralize}" do
           Logic.similar_users(self, options)
         end
           
         define_method "recommended_#{options[:on_class].name.underscore.pluralize}" do
-          if self.aar_options[:use_dataset]
+          if self.aar_options[on][:use_dataset]
             Logic.dataset_recommended(self, options)
           else
             Logic.recommended(self, options)
           end
         end
         
-        define_method "aar_items_with_scores" do
-          @aar_items_with_scores ||= begin
-            self.__send__(self.aar_options[:through]).collect {|ui|
-              item = ui.__send__(self.aar_options[:on_singular])
+        define_method "aar_items_with_scores" do |onc|
+          @aar_items_with_scores ||= {}
+          @aar_items_with_scores[onc] ||= begin
+            self.__send__(self.aar_options[onc][:through]).collect {|ui|
+              item = ui.__send__(self.aar_options[onc][:on_singular])
               next unless item
               if self.aar_options[:score]
-                score = ui.__send__(self.aar_options[:score]).to_f
+                score = ui.__send__(self.aar_options[onc][:score]).to_f
                 score = 1.0 if !score or score <= 0
               else
                 score = 1.0
@@ -91,13 +94,15 @@ module MadeByMany
       
       def self.matrix(options)
         items = options[:on_class].find(:all).collect(&:id)
+        
         prefs = {}
         users = options[:class].find(:all, :include => options[:on])
+        onc = options[:on]
         users.each do |user|
           prefs[user.id] ||= {}
           items.each do |item_id|
-            if user.aar_items_with_scores[item_id]
-              score = user.aar_items_with_scores[item_id].aar_score
+            if user.aar_items_with_scores(onc)[item_id]
+              score = user.aar_items_with_scores(onc)[item_id].aar_score
               prefs[user.id][item_id] = score
             end
           end
@@ -109,11 +114,12 @@ module MadeByMany
         items = options[:on_class].find(:all).collect(&:id)
         prefs = {}
         users = options[:class].find(:all, :include => options[:on])
+        onc = options[:on]
         items.each do |item_id|
           prefs[item_id] ||= {}
           users.each do |user|
-            if user.aar_items_with_scores[item_id]
-              score = user.aar_items_with_scores[item_id].aar_score
+            if user.aar_items_with_scores(onc)[item_id]
+              score = user.aar_items_with_scores(onc)[item_id].aar_score
               prefs[item_id][user.id] = score
             end
           end
@@ -293,7 +299,7 @@ module MadeByMany
       def self.dataset_recommended(user, options)
         scores    = {}
         total_sim = {}
-        items     = user.aar_items_with_scores
+        items     = user.aar_items_with_scores(options[:on])
         item_ids  = items.values.collect(&:id)
         unless options[:split_dataset]
           cached_dataset = Rails.cache.read("aar_#{options[:on]}_dataset")
